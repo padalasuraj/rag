@@ -1,0 +1,24 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="ng" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#00DBDE" />
+      <stop offset="1" stop-color="#7C5CFF" />
+    </linearGradient>
+  </defs>
+  <!-- orbital ring -->
+  <path d="M32 6 L54 19 V45 L32 58 L10 45 V19 Z" stroke="url(#ng)" stroke-width="2.5"
+        fill="rgba(0,219,222,0.06)" stroke-linejoin="round" />
+  <!-- converging links -->
+  <g stroke="url(#ng)" stroke-width="2" stroke-linecap="round" opacity="0.9">
+    <line x1="32" y1="32" x2="32" y2="12" />
+    <line x1="32" y1="32" x2="49" y2="42" />
+    <line x1="32" y1="32" x2="15" y2="42" />
+  </g>
+  <!-- outer nodes -->
+  <circle cx="32" cy="12" r="3.5" fill="#00DBDE" />
+  <circle cx="49" cy="42" r="3.5" fill="#7C5CFF" />
+  <circle cx="15" cy="42" r="3.5" fill="#7C5CFF" />
+  <!-- core -->
+  <circle cx="32" cy="32" r="6" fill="url(#ng)" />
+  <circle cx="32" cy="32" r="6" stroke="#E6EDF6" stroke-opacity="0.35" stroke-width="1.5" />
+</svg>
