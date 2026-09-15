@@ -1,111 +1,113 @@
-"""Prompt engineering.
+import os
+import tempfile
+import whisper
 
-The system prompt is the single most important lever for grounded RAG. We:
-1. Give the model ONLY numbered context passages.
-2. Force it to cite the passages it used with [n] markers.
-3. Force an explicit "not found" response when context is insufficient.
+from dotenv import load_dotenv
+from pytube import YouTube
 
-Citations shown to the user are computed from retrieved-chunk metadata in code,
-so the model cannot invent a source that was never retrieved.
-"""
-
-from __future__ import annotations
-
-GROUNDED_SYSTEM_PROMPT = """You are NexusRAG, a knowledge-base assistant.
-
-Answer the user's question using ONLY the numbered context passages provided \
-below. Each passage is prefixed with an index like [1], [2].
-
-Rules you must follow:
-- Base every claim strictly on the provided passages.
-- After each sentence or claim, cite the passage(s) that support it using its \
-number in square brackets, e.g. "Gradient descent minimizes a loss function [2]."
-- You may combine information from multiple passages.
-- Do NOT use outside knowledge. Do NOT guess or fill in missing details.
-- If the passages do not contain enough information to answer, reply with \
-exactly: "I couldn't find enough information about this in the provided sources." \
-and nothing else.
-- Be concise and well-structured. Use Markdown (short paragraphs, lists, code \
-blocks, tables) when it improves clarity.
-
-Never fabricate citations. Only cite passages that actually appear below."""
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_community.document_loaders import TextLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import DocArrayInMemorySearch
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 
 
-CONTEXTUALIZE_SYSTEM_PROMPT = """You rewrite a user's latest question into a \
-standalone search query.
-
-Given the recent conversation and the latest question, produce ONE self-contained \
-query that resolves pronouns and references (e.g. turn "what are its advantages?" \
-into "what are the advantages of logistic regression?").
-
-Output ONLY the rewritten query text with no preamble, quotes, or explanation. \
-If the latest question is already self-contained, return it unchanged."""
+# Load API key
+load_dotenv()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 
-RELATED_QUESTIONS_SYSTEM_PROMPT = """You generate follow-up questions.
-
-Based on the provided context passages and the user's question, propose 3 short, \
-specific follow-up questions a curious learner might ask next, each answerable \
-from the same material.
-
-Return ONLY a JSON array of 3 strings. No preamble, no markdown fences."""
+# LLM
+model = ChatOpenAI(
+    openai_api_key=OPENAI_API_KEY,
+    model="gpt-3.5-turbo"
+)
 
 
-QUIZ_SYSTEM_PROMPT = """You are a quiz generator for a study platform.
+# Prompt
+prompt = ChatPromptTemplate.from_template("""
+Answer the question based on the context below.
+If you can't answer, reply "I don't know".
 
-Create multiple-choice questions using ONLY the provided context passages. Each \
-question must have exactly 4 options labeled A, B, C, D, exactly one correct \
-answer, a one-sentence explanation, and the index [n] of the passage the \
-question is based on.
+Context: {context}
 
-Do not invent facts beyond the passages. Return ONLY valid JSON matching this \
-schema (no markdown fences):
-{
-  "questions": [
+Question: {question}
+""")
+
+
+# YouTube video
+YOUTUBE_VIDEO = "https://www.youtube.com/watch?v=cdiD-9MMpb0"
+
+
+# Download audio
+youtube = YouTube(YOUTUBE_VIDEO)
+audio = youtube.streams.filter(only_audio=True).first()
+
+
+# Whisper transcription
+whisper_model = whisper.load_model("base")
+
+with tempfile.TemporaryDirectory() as tmpdir:
+    file = audio.download(output_path=tmpdir)
+
+    transcription = whisper_model.transcribe(
+        file,
+        fp16=False
+    )["text"].strip()
+
+
+# Save transcription
+with open("transcription.txt", "w") as f:
+    f.write(transcription)
+
+
+# Load transcription
+loader = TextLoader("transcription.txt")
+text_documents = loader.load()
+
+
+# Split into chunks
+splitter = RecursiveCharacterTextSplitter(
+    chunk_size=1000,
+    chunk_overlap=20
+)
+
+documents = splitter.split_documents(text_documents)
+
+
+# Create embeddings
+embeddings = OpenAIEmbeddings()
+
+
+# Vector store
+vectorstore = DocArrayInMemorySearch.from_documents(
+    documents,
+    embeddings
+)
+
+
+# Retriever
+retriever = vectorstore.as_retriever()
+
+
+# RAG chain
+chain = (
     {
-      "question": "string",
-      "options": [
-        {"label": "A", "text": "string"},
-        {"label": "B", "text": "string"},
-        {"label": "C", "text": "string"},
-        {"label": "D", "text": "string"}
-      ],
-      "correct_label": "A",
-      "explanation": "string",
-      "passage_index": 1
+        "context": retriever,
+        "question": RunnablePassthrough()
     }
-  ]
-}"""
+    | prompt
+    | model
+    | StrOutputParser()
+)
 
 
-SUMMARIZE_PROMPTS: dict[str, str] = {
-    "summary": (
-        "Summarize the following material into a clear, well-structured summary "
-        "using Markdown. Capture the main ideas faithfully; do not add outside "
-        "information."
-    ),
-    "key_points": (
-        "Extract the key points from the following material as a concise Markdown "
-        "bullet list. Each bullet should be a single, self-contained idea grounded "
-        "in the text."
-    ),
-    "eli5": (
-        "Explain the following material in simple, beginner-friendly language, as "
-        "if to someone new to the topic. Use plain words and short analogies, but "
-        "stay faithful to the source."
-    ),
-}
+# Ask question
+question = input("Ask a question: ")
 
+answer = chain.invoke(question)
 
-def build_context_block(passages: list[str]) -> str:
-    """Render retrieved passages as a numbered block for the LLM."""
-    return "\n\n".join(f"[{i + 1}] {p.strip()}" for i, p in enumerate(passages))
-
-
-def build_grounded_user_prompt(question: str, passages: list[str]) -> str:
-    context = build_context_block(passages)
-    return (
-        f"Context passages:\n{context}\n\n"
-        f"Question: {question}\n\n"
-        "Answer using only the passages above, with [n] citations."
-    )
+print("\nAnswer:")
+print(answer)
