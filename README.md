@@ -111,3 +111,6 @@ answer = chain.invoke(question)
 
 print("\nAnswer:")
 print(answer)
+
+<img width="1536" height="1024" alt="process" src="https://github.com/user-attachments/assets/724cdae8-604e-4696-a018-53772a60be92" />
+
