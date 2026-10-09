@@ -18,8 +18,10 @@ from __future__ import annotations
 import logging
 
 from app.db import SessionLocal
+from app.config import settings
 from app.models import Chunk, Source
 from app.services import embedding_service
+from app.services.embedding_service import EmbeddingError
 from app.services.chunking_service import (
     TextChunk,
     chunk_pages,
@@ -51,6 +53,8 @@ def _index_chunks(db, source: Source, chunks: list[TextChunk]) -> int:
     """Embed chunks, upsert vectors, and persist chunk rows. Returns count."""
     if not chunks:
         raise ValueError("No content to index after chunking.")
+    if len(chunks) > settings.max_source_chunks:
+        raise EmbeddingError("This source is too large for the free workspace. Split it into smaller documents and upload again.")
 
     # 1) Persist chunk rows first so each row's UUID becomes the vector id.
     rows = [
@@ -94,7 +98,13 @@ def _index_chunks(db, source: Source, chunks: list[TextChunk]) -> int:
         )
         for row, vec in zip(rows, vectors)
     ]
-    get_vector_store().upsert(records)
+    store = get_vector_store()
+    from app.services.vectorstore.sql_store import SQLVectorStore
+
+    if isinstance(store, SQLVectorStore):
+        store.upsert_in_session(db, records)
+    else:
+        store.upsert(records)
 
     db.commit()
     return len(rows)
@@ -121,6 +131,8 @@ def ingest_pdf(source_id: str, file_bytes: bytes) -> None:
         logger.info("event=ingest_ok type=pdf source=%s chunks=%d", source_id, count)
     except PDFExtractionError as exc:
         _fail(db, source_id, str(exc))
+    except EmbeddingError as exc:
+        _fail(db, source_id, str(exc))
     except Exception as exc:  # noqa: BLE001
         logger.exception("event=ingest_error type=pdf source=%s", source_id)
         _fail(db, source_id, "Failed to process the PDF. Please try another file.")
@@ -145,6 +157,8 @@ def ingest_youtube(source_id: str, video_id: str) -> None:
         logger.info("event=ingest_ok type=youtube source=%s chunks=%d", source_id, count)
     except YouTubeError as exc:
         _fail(db, source_id, str(exc))
+    except EmbeddingError as exc:
+        _fail(db, source_id, str(exc))
     except Exception:  # noqa: BLE001
         logger.exception("event=ingest_error type=youtube source=%s", source_id)
         _fail(db, source_id, "Failed to process the video transcript.")
@@ -166,6 +180,8 @@ def ingest_text(source_id: str, content: str) -> None:
         source.meta = {**source.meta, "char_count": len(cleaned)}
         _set_status(db, source, "completed")
         logger.info("event=ingest_ok type=text source=%s chunks=%d", source_id, count)
+    except EmbeddingError as exc:
+        _fail(db, source_id, str(exc))
     except Exception:  # noqa: BLE001
         logger.exception("event=ingest_error type=text source=%s", source_id)
         _fail(db, source_id, "Failed to process the pasted text.")
@@ -174,6 +190,7 @@ def ingest_text(source_id: str, content: str) -> None:
 
 
 def _fail(db, source_id: str, message: str) -> None:
+    db.rollback()
     source = db.get(Source, source_id)
     if source is not None:
         _set_status(db, source, "failed", message)

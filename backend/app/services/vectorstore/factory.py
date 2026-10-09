@@ -82,6 +82,10 @@ def get_vector_store() -> VectorStore:
             from app.services.vectorstore.pinecone_store import PineconeVectorStore
 
             _store = PineconeVectorStore()
+        elif settings.vector_store == "sql":
+            from app.services.vectorstore.sql_store import SQLVectorStore
+
+            _store = SQLVectorStore()
         else:  # pragma: no cover
             raise ValueError(f"Unknown vector store: {settings.vector_store}")
         logger.info("event=vector_store_init backend=%s", settings.vector_store)

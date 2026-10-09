@@ -12,8 +12,9 @@ python-dotenv>=1.0
 SQLAlchemy>=2.0,<3.0
 # psycopg[binary]>=3.1              # uncomment for PostgreSQL
 
-# --- AI providers ---
-openai>=1.30                       # LLM + embeddings (OpenAI-compatible)
+# --- Local AI providers ---
+sentence-transformers>=3.0,<4.0    # local embeddings
+torch>=2.2                         # backend for sentence-transformers
 
 # --- Vector store (Chroma is the default, local + persistent) ---
 chromadb>=0.5.5,<2.0.0

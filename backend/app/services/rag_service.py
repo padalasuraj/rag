@@ -26,9 +26,12 @@ from sqlalchemy import select
 from app.config import settings
 from app.models import ChatMessage, QueryLog, Source
 from app.schemas import ChatResponse, Citation
+from app.services.embedding_service import EmbeddingError
+from app.services.llm_service import LLMError
 from app.services import llm_service
 from app.services.retrieval_service import retrieve
 from app.services.vectorstore.base import SearchHit
+from app.services.vectorstore.chroma_store import VectorDimensionError
 from app.utils.helpers import youtube_watch_url
 from app.utils.prompts import (
     CONTEXTUALIZE_SYSTEM_PROMPT,
@@ -265,6 +268,9 @@ def answer_stream(db, request) -> Iterator[str]:
             "related_questions": related,
             "latency_ms": round(latency, 1),
         })
+    except (EmbeddingError, LLMError, VectorDimensionError) as exc:
+        logger.warning("event=chat_stream_provider_error kb=%s error=%s", request.knowledge_base_id, exc)
+        yield _sse({"type": "error", "message": str(exc)})
     except Exception as exc:  # noqa: BLE001
         logger.exception("event=chat_stream_error kb=%s", request.knowledge_base_id)
         yield _sse({

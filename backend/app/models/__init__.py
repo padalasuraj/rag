@@ -20,6 +20,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     Text,
 )
@@ -125,6 +126,33 @@ class QueryLog(Base):
     # Which source ids contributed to the answer (for "most queried sources").
     source_ids: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class StoredFile(Base):
+    """Original uploads survive cloud restarts alongside metadata."""
+
+    __tablename__ = "stored_files"
+    source_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    content: Mapped[bytes] = mapped_column(LargeBinary)
+
+
+class StoredVector(Base):
+    """Small-workspace vector storage without a separate vector service."""
+
+    __tablename__ = "stored_vectors"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    collection: Mapped[str] = mapped_column(String(200), index=True)
+    knowledge_base_id: Mapped[str] = mapped_column(String(32), index=True)
+    source_id: Mapped[str] = mapped_column(String(32), index=True)
+    embedding: Mapped[list] = mapped_column(JSON)
+    text: Mapped[str] = mapped_column(Text)
+    meta: Mapped[dict] = mapped_column(JSON)
+
+
+class WorkspaceKnowledgeBase(Base):
+    __tablename__ = "workspace_knowledge_bases"
+    knowledge_base_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True)
 
 
 __all__ = [

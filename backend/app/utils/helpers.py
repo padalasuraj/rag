@@ -72,7 +72,7 @@ def format_timestamp(seconds: float | None) -> str:
 # --------------------------------------------------------------------------- #
 
 _WS = re.compile(r"[ \t]+")
-_MULTI_NL = re.compile(r"\n{3,}")
+_MULTI_NL = re.compile(r"\n{2,}")
 
 
 def clean_text(text: str) -> str:
@@ -85,7 +85,7 @@ def clean_text(text: str) -> str:
     text = re.sub(r"(\w)-\n(\w)", r"\1\2", text)
     lines = [_WS.sub(" ", ln).strip() for ln in text.split("\n")]
     text = "\n".join(lines)
-    text = _MULTI_NL.sub("\n\n", text)
+    text = _MULTI_NL.sub("\n", text)
     return text.strip()
 
 

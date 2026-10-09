@@ -20,12 +20,16 @@ _db_fd, _db_path = tempfile.mkstemp(suffix=".db")
 os.close(_db_fd)
 os.environ["ENVIRONMENT"] = "test"
 os.environ["DATABASE_URL"] = f"sqlite:///{_db_path}"
-os.environ["OPENAI_API_KEY"] = "test-key-not-used"
+os.environ["LLM_PROVIDER"] = "ollama"
+os.environ["LLM_MODEL"] = "qwen3:8b"
+os.environ["EMBEDDING_PROVIDER"] = "sentence_transformers"
+os.environ["EMBEDDING_MODEL"] = "sentence-transformers/all-MiniLM-L6-v2"
 os.environ["STORAGE_DIR"] = tempfile.mkdtemp()
 os.environ["CHROMA_DIR"] = tempfile.mkdtemp()
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from app.api import health as health_api  # noqa: E402
 from app.main import app  # noqa: E402
 from app.services import embedding_service, llm_service  # noqa: E402
 from app.services.vectorstore.factory import (  # noqa: E402
@@ -81,6 +85,12 @@ def _inject_providers():
     embedding_service.set_embedding_provider(MockEmbeddingProvider())
     llm_service.set_llm_provider(MockLLMProvider())
     set_vector_store(InMemoryVectorStore())
+    health_api.probe_ollama = lambda model: {
+        "provider": "ollama",
+        "model": model,
+        "status": "connected",
+        "message": "Ollama is mocked for tests.",
+    }
     yield
 
 

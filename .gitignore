@@ -30,6 +30,8 @@ dist/
 dist-ssr/
 *.local
 .vite/
+frontend/dist-check*/
+*.tsbuildinfo
 
 # ---- Editors / OS ----
 .vscode/

@@ -1,6 +1,7 @@
 # NexusRAG — one-command local stack.
 #
-#   1. cp backend/.env.example backend/.env   (then add your OPENAI_API_KEY)
+#   1. cp backend/.env.example backend/.env
+#      If Ollama runs on the host, set OLLAMA_BASE_URL=http://host.docker.internal:11434
 #   2. docker compose up --build
 #   3. open http://localhost:8080
 #

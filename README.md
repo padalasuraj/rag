@@ -1,281 +1,272 @@
-<div align="center">
+# NexusRAG
 
-# 🧠 NexusRAG
+## Online Deployment Status
 
-**Turn your documents, videos, and notes into an AI assistant that answers _only_ from your sources — with a citation for every claim.**
+The cloud migration is in progress. There is no verified live deployment yet.
+The web interface and API are packaged together in the root `Dockerfile`, and
+`VECTOR_STORE=sql` stores vectors and original PDFs in the database so uploads
+survive hosting restarts when `DATABASE_URL` points to managed PostgreSQL.
+Browser workspaces are isolated with an HTTP-only cookie. Keep that cookie to
+return to the same workspace; this is not account-based, cross-device login.
 
-A full-stack, production-shaped Retrieval-Augmented Generation platform.
+Planned free-tier services are Render for hosting, Neon for PostgreSQL, and a
+hosted AI provider for generation and embeddings. Provider selection requires
+approval because uploaded passages and questions leave the application server.
+Hosted AI credentials and hosting-account access have not been configured.
+The existing local AI providers remain available until that selection is made.
 
-![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.110-009688?logo=fastapi&logoColor=white)
-![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
-![TypeScript](https://img.shields.io/badge/TypeScript-5.5-3178C6?logo=typescript&logoColor=white)
-![Vite](https://img.shields.io/badge/Vite-5-646CFF?logo=vite&logoColor=white)
-![Tailwind](https://img.shields.io/badge/Tailwind-3-06B6D4?logo=tailwindcss&logoColor=white)
-![ChromaDB](https://img.shields.io/badge/ChromaDB-local-FF6B6B)
-![License](https://img.shields.io/badge/License-MIT-green)
+`deployment/render.yaml.example` is a deployment draft, not a working launch
+button. Do not deploy it until the hosted AI provider is implemented and the
+runtime secrets are configured. No local installations are required for the
+intended online application.
 
-</div>
+GitHub Actions checks the backend tests, frontend build, and container build.
+The cloud dependency set avoids local AI model packages. SQL vector search is
+intended for small workspaces, and limits each source to 1,000 chunks; it uses
+exact cosine search with the existing threshold and MMR reranking.
 
----
+Free hosting has limits: Render can sleep after inactivity, Neon has storage
+and compute allowances, and AI APIs impose quotas. Free plans do not guarantee
+an always-awake service. YouTube extraction requires accessible captions;
+scanned PDFs without a text layer require OCR, which is not implemented.
 
-## Overview
+Service references: [Render](https://render.com/docs/free),
+[Neon](https://neon.com/pricing),
+[Gemini pricing and data use](https://ai.google.dev/gemini-api/docs/pricing).
 
-NexusRAG lets you build **knowledge bases** from three kinds of sources — **PDFs, YouTube videos, and pasted text** — then chat with a grounded assistant over them. Under the hood it runs a full RAG pipeline: ingest → clean → chunk → embed → store in a vector database → retrieve with reranking → answer with a strict, source-grounded prompt.
+NexusRAG is a full-stack Retrieval-Augmented Generation app for PDFs, YouTube
+transcripts, and pasted text. It runs locally with FastAPI, React, ChromaDB,
+SQLite, Ollama for chat generation, and Sentence Transformers for embeddings.
 
-The defining feature is **honest grounding**. Answers are constructed only from retrieved passages, every answer carries clickable citations back to the exact **PDF page** or **YouTube timestamp**, and when the sources don't contain an answer, the assistant says so instead of hallucinating.
-
-It runs locally with **only an OpenAI API key** — the default vector store is a local, persistent ChromaDB and the default metadata store is SQLite, so there's nothing else to install or provision.
+The assistant answers only from retrieved source passages, streams responses over
+Server-Sent Events, and attaches citations back to the original PDF page,
+YouTube timestamp, or text snippet.
 
 ## Features
 
-- **Multi-source ingestion** — PDFs (PyMuPDF text extraction), YouTube (transcript + metadata), and raw text, each processed by a dedicated pipeline.
-- **Grounded, cited answers** — a strict system prompt plus citations computed in code from real retrieved-chunk metadata, so the model cannot invent a source.
-- **Clickable citations** — jump straight to the cited PDF page (`#page=N`) or the exact YouTube moment (`&t=SECONDS`); text sources open the retrieved snippet.
-- **Honest "not found"** — a similarity threshold means low-confidence retrievals return a graceful fallback instead of a made-up answer.
-- **Advanced retrieval** — cosine similarity, a configurable score threshold, and **MMR reranking** for relevance + diversity (reusing already-fetched embeddings, no extra API calls).
-- **Query contextualization** — follow-up questions are rewritten against chat history so "what about the second one?" retrieves correctly.
-- **Streaming chat** — answers stream token-by-token over Server-Sent Events, with conversational memory per knowledge base.
-- **Study mode** — generate grounded multiple-choice quizzes from a whole knowledge base or a single source, each question with an explanation and a citation.
-- **Retrieval analytics** — grounded-answer rate, average relevance score, latency, and most-queried sources per knowledge base.
-- **Pluggable providers** — swap ChromaDB → Pinecone, or SQLite → Postgres, via environment variables with zero code changes, thanks to clean provider abstractions.
-- **Premium UI** — a dark, glassmorphic SaaS-grade interface with an animated pipeline hero, built with React + Tailwind + Framer Motion.
+- Local chat model through Ollama, defaulting to `qwen3:8b`.
+- Local embeddings through `sentence-transformers/all-MiniLM-L6-v2`.
+- ChromaDB vector storage with provider/model-specific collection names.
+- SQLite metadata storage by default.
+- PDF, YouTube, and text ingestion with cleaning, chunking, and citation metadata.
+- Similarity thresholding plus MMR reranking before generation.
+- Grounded chat, contextual follow-up question rewriting, streaming, summaries,
+  quiz generation, and retrieval analytics.
+- Tests use mock providers and an in-memory vector store, so they do not require
+  Ollama or external services.
 
 ## Architecture
 
-```mermaid
-flowchart TD
-    subgraph Client["🖥️  React + TypeScript SPA"]
-        UI["Landing · Dashboard · KB workspace<br/>(Sources · Chat · Study · Analytics)"]
-    end
-
-    subgraph API["⚡  FastAPI backend"]
-        direction TB
-        R["REST + SSE routers"]
-
-        subgraph Ingest["Ingestion pipeline (background)"]
-            direction LR
-            EXT["Extract<br/>PDF · YouTube · Text"] --> CLN["Clean"] --> CHK["Chunk<br/>(overlap, sentence-aware)"] --> EMB1["Embed"]
-        end
-
-        subgraph Query["Query pipeline"]
-            direction LR
-            CTX["Contextualize<br/>(rewrite w/ history)"] --> EMB2["Embed query"] --> RET["Vector search<br/>top-k + threshold"] --> MMR["MMR rerank"] --> GEN["Grounded LLM<br/>answer + citations"]
-        end
-    end
-
-    subgraph Providers["🔌  Pluggable providers"]
-        VDB[("Vector store<br/>Chroma / Pinecone")]
-        DB[("Metadata<br/>SQLite / Postgres")]
-        LLM(["OpenAI<br/>LLM + Embeddings"])
-    end
-
-    UI <-->|"/api (JSON + SSE)"| R
-    R --> Ingest
-    R --> Query
-    EMB1 --> VDB
-    EMB1 --> LLM
-    CHK --> DB
-    RET --> VDB
-    EMB2 --> LLM
-    GEN --> LLM
-    GEN -->|"cited answer"| R
+```text
+React frontend
+  -> FastAPI backend
+  -> local Ollama LLM
+  -> local Sentence Transformer embeddings
+  -> ChromaDB
+  -> SQLite
 ```
 
-### How the RAG pipeline works
+The core RAG flow is unchanged:
 
-**Ingestion (runs in the background so the UI stays responsive):**
-
-1. **Extract** — PyMuPDF pulls text per page; `youtube-transcript-api` fetches the transcript with per-segment timestamps; pasted text is taken as-is.
-2. **Clean** — de-hyphenation and whitespace normalization.
-3. **Chunk** — recursive, sentence-aware splitting with overlap. Crucially, each chunk keeps the metadata needed for citations: the **page number** (PDF) or **start time in seconds** (YouTube).
-4. **Embed & store** — chunks are embedded (`text-embedding-3-small`) and upserted into the vector store; a row per chunk is written to the metadata DB.
-
-**Answering a question:**
-
-1. **Contextualize** — with ≥2 prior turns, an LLM rewrite turns a context-dependent follow-up into a standalone query.
-2. **Retrieve** — embed the query, fetch the top-k nearest chunks (optionally filtered by source type), and **drop anything below the similarity threshold**.
-3. **Rerank** — Maximal Marginal Relevance balances relevance against diversity so the context isn't five near-duplicate passages.
-4. **Generate** — the surviving passages are formatted into a numbered context block and sent with a strict grounding prompt. **Citations are built in code** from the retrieved chunks' real metadata — the model can only reference `[n]`, never fabricate a source. If nothing survives the threshold, the assistant returns the honest not-found message.
-
-## Tech stack
-
-| Layer | Choices |
-| --- | --- |
-| **Backend** | FastAPI, Pydantic v2, SQLAlchemy 2.0, Uvicorn |
-| **RAG** | OpenAI SDK (used directly — no LangChain), custom chunking + MMR reranking |
-| **Vector store** | ChromaDB (default, local & persistent) · Pinecone (drop-in) |
-| **Metadata store** | SQLite (default) · PostgreSQL (drop-in) |
-| **Ingestion** | PyMuPDF (PDF), youtube-transcript-api (YouTube) |
-| **Frontend** | React 18, TypeScript, Vite, Tailwind CSS, Framer Motion, Zustand, React Router |
-| **Streaming** | Server-Sent Events (token streaming) |
-| **Infra** | Docker, docker-compose, nginx (static serve + API proxy) |
-| **Testing** | pytest (mock providers + in-memory vector store — runs with no API key) |
-
-## Project structure
-
-```
-nexusrag/
-├── backend/
-│   ├── app/
-│   │   ├── main.py                 # FastAPI app, middleware, router mounts
-│   │   ├── config.py               # Pydantic settings (all env vars)
-│   │   ├── db.py                   # SQLAlchemy engine/session
-│   │   ├── models/                 # ORM: KnowledgeBase, Source, Chunk, ChatMessage, QueryLog
-│   │   ├── schemas/                # Pydantic request/response models
-│   │   ├── api/                    # Routers: knowledge_bases, sources, chat, ai_features, analytics, health
-│   │   ├── services/
-│   │   │   ├── ingestion_service.py    # Background ingest orchestration
-│   │   │   ├── chunking_service.py     # Sentence-aware chunking w/ citation metadata
-│   │   │   ├── embedding_service.py    # Embedding provider (Protocol + OpenAI impl)
-│   │   │   ├── retrieval_service.py    # Vector search + threshold + MMR
-│   │   │   ├── rag_service.py          # Contextualize → retrieve → grounded answer/stream
-│   │   │   ├── ai_features_service.py  # Summaries + quiz generation
-│   │   │   ├── analytics_service.py    # Retrieval metrics
-│   │   │   ├── llm_service.py           # LLM provider (Protocol + OpenAI impl)
-│   │   │   ├── pdf_service.py / youtube_service.py
-│   │   │   └── vectorstore/             # base Protocol, chroma, pinecone, in-memory factory
-│   │   └── utils/                  # prompts, helpers (YouTube URLs, timestamps)
-│   ├── scripts/seed_demo.py        # Seeds a demo knowledge base
-│   ├── tests/                      # pytest suite (mock providers, no keys needed)
-│   ├── requirements.txt · Dockerfile · .env.example
-│
-├── frontend/
-│   ├── src/
-│   │   ├── pages/                  # Landing, Dashboard, KnowledgeBase
-│   │   ├── layouts/AppShell.tsx    # Sidebar + responsive shell
-│   │   ├── components/
-│   │   │   ├── landing/            # Animated pipeline hero
-│   │   │   ├── dashboard/          # KB cards + create modal
-│   │   │   ├── kb/                 # Sources, Chat, Citations, Quiz, Analytics panels
-│   │   │   └── ui/                 # Modal, Tabs, Toaster, Spinner, ConfirmDialog
-│   │   ├── services/api.ts         # Typed API client + SSE stream parser
-│   │   ├── stores/useAppStore.ts   # Zustand store
-│   │   └── types/index.ts
-│   ├── nginx.conf · Dockerfile · .env.example
-│
-├── docker-compose.yml
-├── docs/INTERVIEW_NOTES.md         # Design rationale & talking points
-└── README.md
+```text
+Document ingestion
+  -> text extraction
+  -> cleaning
+  -> chunking
+  -> local embeddings
+  -> ChromaDB
+  -> similarity retrieval
+  -> threshold filtering
+  -> MMR reranking
+  -> context construction
+  -> local LLM
+  -> grounded answer
+  -> citations
 ```
 
-## Getting started
+## Local Setup On Windows
 
-### Prerequisites
+Install Python 3.11+, Node.js 18+, and Ollama for Windows:
 
-- Python 3.11+
-- Node.js 18+
-- An OpenAI API key ([get one here](https://platform.openai.com/api-keys))
+```powershell
+winget install Ollama.Ollama
+```
 
-### 1. Backend
+Or download Ollama from:
 
-```bash
+```text
+https://ollama.com/download
+```
+
+Pull the default local chat model:
+
+```powershell
+ollama pull qwen3:8b
+```
+
+Verify the model works:
+
+```powershell
+ollama run qwen3:8b
+```
+
+Verify the Ollama server is running:
+
+```powershell
+Invoke-RestMethod http://localhost:11434/api/tags
+```
+
+If your laptop has limited RAM, choose a smaller Ollama model and update
+`LLM_MODEL` in `backend/.env`, for example:
+
+```env
+LLM_MODEL=qwen3:4b
+```
+
+## Backend
+
+```powershell
 cd backend
 python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-
-cp .env.example .env               # then edit .env and set OPENAI_API_KEY
-uvicorn app.main:app --reload      # http://localhost:8000  (docs at /docs)
+Copy-Item .env.example .env
+uvicorn app.main:app --reload
 ```
 
-Optionally seed a demo knowledge base to click around immediately:
+The API runs at:
 
-```bash
-python scripts/seed_demo.py
+```text
+http://localhost:8000
 ```
 
-### 2. Frontend
+API docs are available at:
 
-```bash
+```text
+http://localhost:8000/docs
+```
+
+The health endpoint reports the local AI provider and whether the configured
+Ollama model is installed:
+
+```text
+http://localhost:8000/api/health
+```
+
+## Frontend
+
+```powershell
 cd frontend
 npm install
-npm run dev                        # http://localhost:5173
+npm run dev
 ```
 
-The Vite dev server proxies `/api` to `http://localhost:8000`, so the two run side by side with no CORS fuss. Open **http://localhost:5173** and start building a knowledge base.
+Open:
 
-## Environment variables
+```text
+http://localhost:5173
+```
 
-Set these in `backend/.env` (see `.env.example` for the full list). Only `OPENAI_API_KEY` is required to get going.
+## Environment
 
-| Variable | Default | Description |
-| --- | --- | --- |
-| `OPENAI_API_KEY` | — | **Required.** Your OpenAI key. |
-| `LLM_MODEL` | `gpt-4o-mini` | Chat model for answers, contextualization, quizzes. |
-| `EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model (1536 dims). |
-| `VECTOR_STORE` | `chroma` | `chroma` (local) or `pinecone`. |
-| `DATABASE_URL` | `sqlite:///./nexusrag.db` | Swap to a `postgresql+psycopg://…` URL for Postgres. |
-| `CHUNK_SIZE` / `CHUNK_OVERLAP` | `900` / `150` | Chunking size and overlap (characters). |
-| `RETRIEVAL_TOP_K` | `12` | Candidates fetched from the vector store. |
-| `RERANK_TOP_N` | `5` | Passages kept after MMR reranking. |
-| `SIMILARITY_THRESHOLD` | `0.18` | Minimum cosine similarity; below this → "not found". |
-| `MMR_LAMBDA` | `0.6` | MMR relevance/diversity trade-off (1 = pure relevance). |
-| `MAX_UPLOAD_MB` | `25` | Max PDF upload size. |
-| `CORS_ORIGINS` | dev origins | Comma-separated allowed frontend origins. |
-| `PINECONE_API_KEY` / `PINECONE_INDEX` | — | Only when `VECTOR_STORE=pinecone`. |
+Copy `backend/.env.example` to `backend/.env`. The default local configuration is:
 
-## Run with Docker
+```env
+LLM_PROVIDER=ollama
+LLM_MODEL=qwen3:8b
+OLLAMA_BASE_URL=http://localhost:11434
 
-```bash
-cp backend/.env.example backend/.env   # add your OPENAI_API_KEY
+EMBEDDING_PROVIDER=sentence_transformers
+EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+EMBEDDING_DIMENSIONS=384
+
+VECTOR_STORE=chroma
+DATABASE_URL=sqlite:///./nexusrag.db
+
+CHUNK_SIZE=900
+CHUNK_OVERLAP=150
+
+RETRIEVAL_TOP_K=12
+RERANK_TOP_N=5
+SIMILARITY_THRESHOLD=0.18
+MMR_LAMBDA=0.6
+```
+
+`sentence-transformers/all-MiniLM-L6-v2` is downloaded the first time the
+embedding provider is loaded if it is not already cached. After Ollama and the
+embedding model are installed locally, AI features run on your computer.
+
+Changing embedding models changes vector dimensions. NexusRAG uses a generated
+Chroma collection name that includes the embedding provider, model, and
+dimension so older indexes are not mixed with new local embeddings. If you set
+`CHROMA_COLLECTION` manually and change embedding models, rebuild that
+collection.
+
+## Docker
+
+The backend image does not install or run Ollama. Run Ollama separately on the
+host or as its own service.
+
+For the common Windows host-Ollama workflow, set this in `backend/.env` before
+starting Docker:
+
+```env
+OLLAMA_BASE_URL=http://host.docker.internal:11434
+```
+
+Then run:
+
+```powershell
 docker compose up --build
-# open http://localhost:8080
 ```
 
-`frontend` (nginx) serves the built SPA and reverse-proxies `/api` to the `backend` service, so the whole app — including SSE streaming — is same-origin. Uploads and the Chroma index persist in the `nexus_storage` volume.
+Open:
 
-## API
-
-Interactive OpenAPI docs are served at **`http://localhost:8000/docs`**. Key endpoints:
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `POST` | `/api/knowledge-bases` | Create a knowledge base |
-| `POST` | `/api/sources/pdf` \| `/youtube` \| `/text` | Add a source (ingested in the background) |
-| `GET` | `/api/sources/{id}` | Poll ingestion status |
-| `GET` | `/api/sources/{id}/file` | Serve a PDF (for citation deep-links) |
-| `POST` | `/api/chat` | Ask a question (JSON or SSE stream) |
-| `POST` | `/api/quiz` · `/api/summarize` | Study-mode features |
-| `GET` | `/api/analytics/{kb_id}` | Retrieval metrics |
-
-## Example queries
-
-Create a knowledge base, drop in a lecture PDF or a technical YouTube video, wait for indexing, then try:
-
-- *"Summarize the key ideas across these sources."*
-- *"What does the paper say about overfitting, and where?"* → answer cites the exact page.
-- *"At what point in the video is backpropagation explained?"* → citation links to the timestamp.
-- Ask something the sources don't cover → the assistant tells you it couldn't find it, rather than guessing.
+```text
+http://localhost:8080
+```
 
 ## Testing
 
-The backend suite runs with **no API key and no external services** — it injects deterministic mock LLM/embedding providers and an in-memory vector store through the same dependency-injection hooks the app uses in production.
+Backend tests use mock AI providers and do not need Ollama:
 
-```bash
+```powershell
 cd backend
-pip install -r requirements-dev.txt
 pytest
 ```
 
-Coverage spans helpers (YouTube URL parsing, timestamps), chunking (size/overlap/metadata), and the API (KB CRUD, ingestion, grounded chat, SSE streaming, quiz, analytics).
+## Project Structure
 
-## Deployment
+```text
+backend/app/services/llm_service.py          Ollama LLM provider
+backend/app/services/embedding_service.py    Sentence Transformers provider
+backend/app/services/rag_service.py          grounded answer orchestration
+backend/app/services/retrieval_service.py    retrieval, thresholding, MMR
+backend/app/services/ingestion_service.py    source ingestion and indexing
+backend/app/services/vectorstore/            Chroma, Pinecone, test store
+frontend/src/                                React app
+```
 
-- **Frontend** → any static host (Vercel / Netlify). Build with `npm run build`; set `VITE_API_URL` to your backend's public `/api` URL if it's on a different origin.
-- **Backend** → any container host (Render / Fly.io / Railway). Point `DATABASE_URL` at managed Postgres and set `VECTOR_STORE=pinecone` with your Pinecone credentials for a fully managed, stateless deployment.
-- **Or** ship the whole thing with the included `docker-compose.yml`.
+## Troubleshooting
 
-## Roadmap / future improvements
+If `/api/health` says the local AI provider is unavailable, start Ollama and try
+again.
 
-These are deliberate extension points, documented in `docs/INTERVIEW_NOTES.md`:
+If `/api/health` says the model is missing, run:
 
-- Full user authentication & multi-tenant knowledge bases
-- In-app PDF.js viewer with highlighted citation spans (currently deep-links to the page)
-- Hybrid retrieval (BM25 + dense) and a cross-encoder reranker
-- Celery/Redis for durable, distributed ingestion at scale
-- Evaluation harness (faithfulness / answer-relevance scoring)
+```powershell
+ollama pull qwen3:8b
+```
+
+If generation fails because there is not enough RAM, use a smaller local model
+and set `LLM_MODEL` accordingly.
+
+If embeddings fail to load, reinstall backend dependencies:
+
+```powershell
+pip install -r requirements.txt
+```
 
 ## License
 
-MIT © 2026 Suraj Padala — see [LICENSE](./LICENSE).
+MIT. See [LICENSE](./LICENSE).

@@ -192,9 +192,13 @@ class HealthResponse(BaseModel):
     app: str
     environment: str
     vector_store: str
+    llm_provider: str
     llm_model: str
+    embedding_provider: str
     embedding_model: str
-    openai_key_present: bool
+    ai_provider: str
+    ai_status: str
+    ai_message: str
 
 
 __all__ = [name for name in dir() if name[0].isupper()]

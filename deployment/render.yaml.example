@@ -1,0 +1,31 @@
+# DRAFT: enable only after the hosted AI provider and runtime secrets are configured.
+services:
+  - type: web
+    name: nexusrag
+    runtime: docker
+    plan: free
+    repo: https://github.com/padalasuraj/rag
+    branch: main
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/session
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: VECTOR_STORE
+        value: sql
+      - key: LLM_PROVIDER
+        sync: false
+      - key: LLM_MODEL
+        sync: false
+      - key: EMBEDDING_PROVIDER
+        sync: false
+      - key: EMBEDDING_MODEL
+        sync: false
+      - key: EMBEDDING_DIMENSIONS
+        sync: false
+      - key: EMBEDDING_BATCH_SIZE
+        value: "20"
+      - key: MAX_UPLOAD_MB
+        value: "10"

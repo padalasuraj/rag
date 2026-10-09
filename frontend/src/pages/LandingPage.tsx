@@ -237,7 +237,7 @@ export function LandingPage() {
           </h2>
           <p className="relative mx-auto mt-3 max-w-lg text-ink-muted">
             Create a knowledge base, add a few sources, and start asking. Runs
-            locally with a single API key.
+            locally with Ollama and no API key.
           </p>
           <Link to="/app" className="btn-primary relative mt-8 px-6 py-3 text-base">
             Launch NexusRAG <ArrowRight className="h-4 w-4" />

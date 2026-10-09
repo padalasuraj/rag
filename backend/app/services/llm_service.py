@@ -1,21 +1,27 @@
 """LLM access.
 
-Like embeddings and the vector store, the chat model sits behind a Protocol so
-the RAG orchestrator never imports OpenAI directly. `complete` is used for
-one-shot generation (summaries, quizzes, query rewriting); `stream` yields text
-deltas for the chat endpoint's server-sent events.
+The chat model sits behind a Protocol so RAG code does not know which local
+runtime serves tokens. `complete` is used for summaries, quizzes, and query
+rewrites; `stream` yields text deltas for server-sent events.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Iterator
 from typing import Protocol
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+_NO_REASONING_INSTRUCTION = (
+    "Do not output hidden reasoning, chain-of-thought, or <think> blocks. "
+    "Return only the final answer requested by the user."
+)
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 
 
 class LLMProvider(Protocol):
@@ -39,50 +45,92 @@ class LLMProvider(Protocol):
         ...
 
 
-class OpenAILLMProvider:
-    def __init__(self) -> None:
-        if not settings.openai_api_key:
-            raise RuntimeError(
-                "OPENAI_API_KEY is not set. Add it to your .env to call the LLM."
-            )
-        from openai import OpenAI
+class LLMError(RuntimeError):
+    """User-facing LLM failure."""
 
-        self._client = OpenAI(
-            api_key=settings.openai_api_key,
-            base_url=settings.openai_base_url or None,
-        )
+
+class OllamaLLMProvider:
+    """Local chat model served by Ollama."""
+
+    def __init__(self) -> None:
         self.model = settings.llm_model
 
     def _messages(self, system: str, user: str) -> list[dict]:
+        system = f"{system.rstrip()}\n\n{_NO_REASONING_INSTRUCTION}"
         return [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ]
 
-    def complete(self, system, user, *, temperature=None, json_mode=False) -> str:
-        kwargs: dict = {
+    def _payload(
+        self,
+        system: str,
+        user: str,
+        *,
+        temperature: float | None = None,
+        json_mode: bool = False,
+        stream: bool = False,
+    ) -> dict:
+        payload: dict = {
             "model": self.model,
             "messages": self._messages(system, user),
-            "temperature": settings.llm_temperature if temperature is None else temperature,
-            "max_tokens": settings.llm_max_tokens,
+            "stream": stream,
+            "options": {
+                "temperature": settings.llm_temperature
+                if temperature is None
+                else temperature,
+                "num_predict": settings.llm_max_tokens,
+            },
         }
         if json_mode:
-            kwargs["response_format"] = {"type": "json_object"}
-        resp = self._client.chat.completions.create(**kwargs)
-        return resp.choices[0].message.content or ""
+            payload["format"] = "json"
+        return payload
+
+    def complete(self, system, user, *, temperature=None, json_mode=False) -> str:
+        from app.services.ollama_client import OllamaError, post_json
+
+        try:
+            resp = post_json(
+                "/api/chat",
+                self._payload(
+                    system,
+                    user,
+                    temperature=temperature,
+                    json_mode=json_mode,
+                ),
+                model=self.model,
+            )
+            content = resp.get("message", {}).get("content", "")
+            if not isinstance(content, str):
+                raise LLMError("Ollama returned an unexpected chat response.")
+            return strip_think_blocks(content)
+        except OllamaError as exc:
+            raise LLMError(str(exc)) from exc
 
     def stream(self, system, user, *, temperature=None) -> Iterator[str]:
-        stream = self._client.chat.completions.create(
-            model=self.model,
-            messages=self._messages(system, user),
-            temperature=settings.llm_temperature if temperature is None else temperature,
-            max_tokens=settings.llm_max_tokens,
-            stream=True,
-        )
-        for chunk in stream:
-            delta = chunk.choices[0].delta.content
-            if delta:
-                yield delta
+        from app.services.ollama_client import OllamaError, stream_json_lines
+
+        try:
+            filter_state = _ThinkStreamFilter()
+            for item in stream_json_lines(
+                "/api/chat",
+                self._payload(system, user, temperature=temperature, stream=True),
+                model=self.model,
+            ):
+                delta = item.get("message", {}).get("content")
+                if delta:
+                    cleaned = filter_state.feed(delta)
+                    if cleaned:
+                        yield cleaned
+                if item.get("done"):
+                    break
+            tail = filter_state.flush()
+            if tail:
+                yield tail
+        except OllamaError as exc:
+            raise LLMError(str(exc)) from exc
+
+
 
 
 _provider: LLMProvider | None = None
@@ -91,8 +139,8 @@ _provider: LLMProvider | None = None
 def get_llm_provider() -> LLMProvider:
     global _provider
     if _provider is None:
-        if settings.llm_provider == "openai":
-            _provider = OpenAILLMProvider()
+        if settings.llm_provider == "ollama":
+            _provider = OllamaLLMProvider()
         else:  # pragma: no cover
             raise ValueError(f"Unknown LLM provider: {settings.llm_provider}")
     return _provider
@@ -125,3 +173,64 @@ def parse_json_response(raw: str) -> dict | list:
                 except json.JSONDecodeError:
                     continue
         raise
+
+
+def strip_think_blocks(text: str) -> str:
+    """Remove reasoning blocks some local instruct models emit by default."""
+    return _THINK_BLOCK_RE.sub("", text).strip()
+
+
+class _ThinkStreamFilter:
+    """Incrementally suppress <think>...</think> spans from streamed chunks."""
+
+    def __init__(self) -> None:
+        self._buffer = ""
+        self._inside_think = False
+
+    def feed(self, chunk: str) -> str:
+        self._buffer += chunk
+        out: list[str] = []
+
+        while self._buffer:
+            lowered = self._buffer.lower()
+            if self._inside_think:
+                end = lowered.find("</think>")
+                if end == -1:
+                    keep = min(len(self._buffer), len("</think>") - 1)
+                    self._buffer = self._buffer[-keep:] if keep else ""
+                    return "".join(out)
+                self._buffer = self._buffer[end + len("</think>") :]
+                self._inside_think = False
+                continue
+
+            start = lowered.find("<think>")
+            partial = _partial_tag_prefix(self._buffer, "<think>")
+            emit_until = len(self._buffer) - partial
+            if start == -1 or start >= emit_until:
+                if emit_until > 0:
+                    out.append(self._buffer[:emit_until])
+                    self._buffer = self._buffer[emit_until:]
+                return "".join(out)
+
+            out.append(self._buffer[:start])
+            self._buffer = self._buffer[start + len("<think>") :]
+            self._inside_think = True
+
+        return "".join(out)
+
+    def flush(self) -> str:
+        if self._inside_think:
+            self._buffer = ""
+            return ""
+        tail = self._buffer
+        self._buffer = ""
+        return tail
+
+
+def _partial_tag_prefix(text: str, tag: str) -> int:
+    max_len = min(len(text), len(tag) - 1)
+    lowered = text.lower()
+    for size in range(max_len, 0, -1):
+        if tag.startswith(lowered[-size:]):
+            return size
+    return 0

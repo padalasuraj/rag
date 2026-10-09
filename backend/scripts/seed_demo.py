@@ -1,7 +1,7 @@
 """Seed a demo knowledge base so the UI has something to explore immediately.
 
-Run from the backend directory (needs OPENAI_API_KEY set, because it generates
-real embeddings):
+Run from the backend directory. It generates real local embeddings, so install
+the embedding dependencies first:
 
     python -m scripts.seed_demo
 

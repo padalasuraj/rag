@@ -9,11 +9,15 @@ from __future__ import annotations
 import logging
 import os
 import uuid
+import re
+import secrets
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api import (
@@ -27,6 +31,7 @@ from app.api import (
 from app.config import settings
 from app.db import init_db
 from app.logging_config import Timer, configure_logging, request_id_ctx
+from app.workspace import workspace_id
 
 configure_logging(settings.log_level)
 logger = logging.getLogger("nexusrag")
@@ -44,6 +49,27 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def private_workspace(request: Request, call_next):
+    cookie = request.cookies.get("nexus_workspace", "")
+    fresh = not re.fullmatch(r"[a-f0-9]{64}", cookie)
+    identity = secrets.token_hex(32) if fresh else cookie
+    token = workspace_id.set(identity)
+    try:
+        response = await call_next(request)
+        if fresh:
+            response.set_cookie("nexus_workspace", identity, max_age=31536000,
+                                httponly=True, secure=settings.environment == "production", samesite="lax")
+        return response
+    finally:
+        workspace_id.reset(token)
+
+
+@app.get(f"{settings.api_prefix}/session")
+def session():
+    return {"status": "ok"}
 
 
 @app.middleware("http")
@@ -90,12 +116,14 @@ def on_startup() -> None:
     os.makedirs(settings.chroma_dir, exist_ok=True)
     init_db()
     logger.info(
-        "startup app=%s env=%s vector_store=%s llm=%s key_present=%s",
+        "startup app=%s env=%s vector_store=%s llm_provider=%s llm=%s embedding_provider=%s embedding_model=%s",
         settings.app_name,
         settings.environment,
         settings.vector_store,
+        settings.llm_provider,
         settings.llm_model,
-        bool(settings.openai_api_key),
+        settings.embedding_provider,
+        settings.embedding_model,
     )
 
 
@@ -104,6 +132,21 @@ for module in (health, knowledge_bases, sources, chat, ai_features, analytics):
     app.include_router(module.router, prefix=settings.api_prefix)
 
 
-@app.get("/")
-def root() -> dict:
-    return {"name": settings.app_name, "docs": "/docs", "api": settings.api_prefix}
+frontend = Path(settings.frontend_dir)
+if (frontend / "assets").is_dir():
+    app.mount("/assets", StaticFiles(directory=frontend / "assets"), name="assets")
+
+
+@app.get("/{path:path}", include_in_schema=False)
+def frontend_page(path: str):
+    if path == settings.api_prefix.lstrip("/") or path.startswith(settings.api_prefix.lstrip("/") + "/"):
+        return JSONResponse(status_code=404, content={"detail": "Endpoint not found."})
+    index = frontend / "index.html"
+    if index.is_file():
+        candidate = (frontend / path).resolve()
+        if candidate.is_relative_to(frontend.resolve()) and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(index)
+    if not path:
+        return {"name": settings.app_name, "docs": "/docs", "api": settings.api_prefix}
+    return JSONResponse(status_code=404, content={"detail": "Page not found."})

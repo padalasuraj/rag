@@ -13,6 +13,16 @@ import type {
 // proxy /api to the backend, so relative URLs work everywhere (incl. SSE).
 export const API_BASE = import.meta.env.VITE_API_URL || '/api'
 
+let workspaceReady: Promise<void> | undefined
+function ensureWorkspace(): Promise<void> {
+  if (!workspaceReady) {
+    workspaceReady = fetch(`${API_BASE}/session`, { credentials: 'include' })
+      .then((res) => { if (!res.ok) throw new Error('Could not connect to your workspace. Please try again.') })
+      .catch((error) => { workspaceReady = undefined; throw error })
+  }
+  return workspaceReady
+}
+
 class ApiError extends Error {
   status: number
   constructor(message: string, status: number) {
@@ -22,7 +32,9 @@ class ApiError extends Error {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  await ensureWorkspace()
   const res = await fetch(`${API_BASE}${path}`, {
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
     ...options,
   })
@@ -66,7 +78,9 @@ export async function streamChat(
   handlers: StreamHandlers,
   signal?: AbortSignal,
 ): Promise<void> {
+  await ensureWorkspace()
   const res = await fetch(`${API_BASE}/chat`, {
+    credentials: 'include',
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...payload, stream: true }),

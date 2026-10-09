@@ -18,13 +18,14 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db
-from app.models import KnowledgeBase, Source
+from app.models import KnowledgeBase, Source, StoredFile
+from app.workspace import require_kb, require_source
 from app.schemas import SourceOut, TextSourceCreate, YouTubeSourceCreate
 from app.services import ingestion_service
 from app.services.youtube_service import YouTubeError, fetch_metadata
@@ -34,7 +35,7 @@ router = APIRouter(prefix="/sources", tags=["sources"])
 
 
 def _require_kb(db: Session, kb_id: str) -> KnowledgeBase:
-    kb = db.get(KnowledgeBase, kb_id)
+    kb = require_kb(db, kb_id)
     if kb is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Knowledge base not found.")
     return kb
@@ -66,7 +67,7 @@ async def add_pdf(
             f"Unsupported file type '{file.content_type}'. Only PDF is allowed.",
         )
 
-    data = await file.read()
+    data = await file.read(settings.max_upload_bytes + 1)
     if len(data) == 0:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "The uploaded file is empty.")
     if len(data) > settings.max_upload_bytes:
@@ -87,11 +88,8 @@ async def add_pdf(
     db.commit()
     db.refresh(source)
 
-    # Persist the original file so citations can open the PDF at a page.
-    file_path = os.path.join(_pdf_dir(), f"{source.id}.pdf")
-    with open(file_path, "wb") as fh:
-        fh.write(data)
-    source.meta = {**source.meta, "file_path": file_path}
+    # Keep original uploads in the same durable database as source metadata.
+    db.add(StoredFile(source_id=source.id, content=data))
     db.add(source)
     db.commit()
     db.refresh(source)
@@ -177,7 +175,7 @@ def list_sources(knowledge_base_id: str, db: Session = Depends(get_db)):
 
 @router.get("/{source_id}", response_model=SourceOut)
 def get_source(source_id: str, db: Session = Depends(get_db)):
-    source = db.get(Source, source_id)
+    source = require_source(db, source_id)
     if source is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Source not found.")
     return source
@@ -188,9 +186,32 @@ def reindex_source(
     source_id: str, background: BackgroundTasks, db: Session = Depends(get_db)
 ):
     """Re-run ingestion for a source (e.g. after a transient failure)."""
-    source = db.get(Source, source_id)
+    source = require_source(db, source_id)
     if source is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Source not found.")
+
+    task: tuple = ()
+    if source.source_type == "youtube":
+        video_id = source.meta.get("video_id")
+        if not video_id:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "Original YouTube video is no longer available."
+            )
+        task = (ingestion_service.ingest_youtube, source.id, video_id)
+    elif source.source_type == "pdf":
+        stored = db.get(StoredFile, source_id)
+        if stored is not None:
+            task = (ingestion_service.ingest_pdf, source.id, stored.content)
+        else:
+            file_path = source.meta.get("file_path")
+            if not file_path or not os.path.exists(file_path):
+                raise HTTPException(status.HTTP_409_CONFLICT, "Original PDF is no longer available.")
+            with open(file_path, "rb") as fh:
+                task = (ingestion_service.ingest_pdf, source.id, fh.read())
+    else:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Text sources cannot be re-indexed automatically."
+        )
 
     # Clear previous vectors + chunk rows before rebuilding.
     ingestion_service.delete_source_vectors(source_id)
@@ -201,31 +222,21 @@ def reindex_source(
     source.num_chunks = 0
     db.commit()
 
-    if source.source_type == "youtube":
-        background.add_task(
-            ingestion_service.ingest_youtube, source.id, source.meta.get("video_id")
-        )
-    elif source.source_type == "pdf":
-        file_path = source.meta.get("file_path")
-        if not file_path or not os.path.exists(file_path):
-            raise HTTPException(status.HTTP_409_CONFLICT, "Original PDF is no longer available.")
-        with open(file_path, "rb") as fh:
-            background.add_task(ingestion_service.ingest_pdf, source.id, fh.read())
-    else:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "Text sources cannot be re-indexed automatically."
-        )
+    background.add_task(*task)
     db.refresh(source)
     return source
 
 
 @router.delete("/{source_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_source(source_id: str, db: Session = Depends(get_db)):
-    source = db.get(Source, source_id)
+    source = require_source(db, source_id)
     if source is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Source not found.")
 
     ingestion_service.delete_source_vectors(source_id)
+    stored = db.get(StoredFile, source_id)
+    if stored is not None:
+        db.delete(stored)
     file_path = source.meta.get("file_path")
     if file_path and os.path.exists(file_path):
         try:
@@ -240,9 +251,12 @@ def delete_source(source_id: str, db: Session = Depends(get_db)):
 @router.get("/{source_id}/file")
 def get_source_file(source_id: str, db: Session = Depends(get_db)):
     """Serve the original PDF so a citation can open it (#page=N)."""
-    source = db.get(Source, source_id)
+    source = require_source(db, source_id)
     if source is None or source.source_type != "pdf":
         raise HTTPException(status.HTTP_404_NOT_FOUND, "PDF not found.")
+    stored = db.get(StoredFile, source_id)
+    if stored is not None:
+        return Response(stored.content, media_type="application/pdf", headers={"Content-Disposition": "inline", "Cache-Control": "private, no-store"})
     file_path = source.meta.get("file_path")
     if not file_path or not os.path.exists(file_path):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "PDF file is unavailable.")

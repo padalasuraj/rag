@@ -26,7 +26,15 @@ function HealthIndicator() {
     )
   }
 
-  const ok = health.openai_key_present
+  const ok = health.ai_status === 'connected' || health.ai_status === 'configured'
+  const label =
+    health.ai_status === 'configured'
+      ? 'AI configured'
+      : health.ai_status === 'connected'
+      ? 'AI connected'
+      : health.ai_status === 'model_missing'
+        ? 'Model not installed'
+        : 'AI unavailable'
   return (
     <div className="card space-y-2 p-3">
       <div className="flex items-center gap-2">
@@ -37,7 +45,7 @@ function HealthIndicator() {
           )}
         />
         <span className="text-xs font-medium text-ink">
-          {ok ? 'OpenAI connected' : 'No API key set'}
+          {label}
         </span>
       </div>
       <div className="space-y-0.5 text-[0.7rem] text-ink-dim">
@@ -46,8 +54,12 @@ function HealthIndicator() {
           <span className="font-mono text-ink-muted">{health.vector_store}</span>
         </div>
         <div className="flex justify-between gap-2">
+          <span>Provider</span>
+          <span className="font-mono text-ink-muted">{health.ai_provider}</span>
+        </div>
+        <div className="flex justify-between gap-2">
           <span>Model</span>
-          <span className="font-mono text-ink-muted">{health.llm_model}</span>
+          <span className="min-w-0 truncate font-mono text-ink-muted" title={health.llm_model}>{health.llm_model}</span>
         </div>
       </div>
     </div>
@@ -56,6 +68,7 @@ function HealthIndicator() {
 
 function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const knowledgeBases = useAppStore((s) => s.knowledgeBases)
+  const health = useAppStore((s) => s.health)
   const openCreateKb = useAppStore((s) => s.openCreateKb)
 
   return (
@@ -131,13 +144,14 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
       <div className="space-y-3">
         <HealthIndicator />
         <a
-          href="https://platform.openai.com/api-keys"
+          href="/docs"
           target="_blank"
           rel="noreferrer"
           className="flex items-center gap-2 px-1 text-xs text-ink-dim transition hover:text-ink-muted"
+          title={health?.ai_message}
         >
           <HelpCircle className="h-3.5 w-3.5" />
-          Where do I get an API key?
+          API status
         </a>
       </div>
     </div>

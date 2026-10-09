@@ -10,7 +10,11 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models import ChatMessage, KnowledgeBase
 from app.schemas import ChatRequest, ChatResponse, MessageOut
+from app.services.embedding_service import EmbeddingError
+from app.services.llm_service import LLMError
 from app.services import rag_service
+from app.services.vectorstore.chroma_store import VectorDimensionError
+from app.workspace import require_kb
 
 router = APIRouter(tags=["chat"])
 
@@ -22,8 +26,7 @@ _SSE_HEADERS = {
 
 
 def _require_kb(db: Session, kb_id: str) -> None:
-    if db.get(KnowledgeBase, kb_id) is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Knowledge base not found.")
+    require_kb(db, kb_id)
 
 
 @router.post("/chat")
@@ -37,8 +40,11 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
             media_type="text/event-stream",
             headers=_SSE_HEADERS,
         )
-    result: ChatResponse = rag_service.answer(db, request)
-    return result
+    try:
+        result: ChatResponse = rag_service.answer(db, request)
+        return result
+    except (EmbeddingError, LLMError, VectorDimensionError) as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
 
 
 @router.get("/chat/{kb_id}/history", response_model=list[MessageOut])

@@ -24,6 +24,9 @@ def test_health(client):
     body = resp.json()
     assert body["status"] == "ok"
     assert body["vector_store"] in {"chroma", "pinecone"}
+    assert body["llm_provider"] == "ollama"
+    assert body["embedding_provider"] == "sentence_transformers"
+    assert body["ai_status"] == "connected"
 
 
 def test_knowledge_base_crud(client):
@@ -60,6 +63,24 @@ def test_text_ingestion_completes_and_counts(client, kb_id):
     kb = client.get(f"/api/knowledge-bases/{kb_id}").json()
     assert kb["source_counts"]["text"] == 1
     assert kb["chunk_count"] >= 1
+
+
+def test_text_reindex_does_not_mutate_source(client, kb_id):
+    source = _add_text_source(
+        client,
+        kb_id,
+        "DBMS Notes",
+        "Database management systems organize data and support transactions. " * 5,
+    )
+    before = client.get(f"/api/sources/{source['id']}").json()
+
+    resp = client.post(f"/api/sources/{source['id']}/reindex")
+
+    assert resp.status_code == 409
+    after = client.get(f"/api/sources/{source['id']}").json()
+    assert after["status"] == before["status"] == "completed"
+    assert after["num_chunks"] == before["num_chunks"]
+    assert after["error"] is None
 
 
 def test_chat_grounded_answer_with_citations(client, kb_id):

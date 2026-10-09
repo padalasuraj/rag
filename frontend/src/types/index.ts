@@ -97,7 +97,11 @@ export interface Health {
   app: string
   environment: string
   vector_store: string
+  llm_provider: string
   llm_model: string
+  embedding_provider: string
   embedding_model: string
-  openai_key_present: boolean
+  ai_provider: string
+  ai_status: 'connected' | 'model_missing' | 'unavailable' | string
+  ai_message: string
 }

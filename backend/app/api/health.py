@@ -1,9 +1,4 @@
-"""Health and status endpoint.
-
-The frontend hits this on load to detect whether the backend is configured
-(e.g. whether an OpenAI key is present) and to show which providers are active.
-It never returns the key itself — only whether one is set.
-"""
+"""Health and status endpoint."""
 
 from __future__ import annotations
 
@@ -11,18 +6,24 @@ from fastapi import APIRouter
 
 from app.config import settings
 from app.schemas import HealthResponse
+from app.services.ollama_client import probe_ollama
 
 router = APIRouter(tags=["health"])
 
 
 @router.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
+    ai = probe_ollama(settings.llm_model)
     return HealthResponse(
         status="ok",
         app=settings.app_name,
         environment=settings.environment,
         vector_store=settings.vector_store,
+        llm_provider=settings.llm_provider,
         llm_model=settings.llm_model,
+        embedding_provider=settings.embedding_provider,
         embedding_model=settings.embedding_model,
-        openai_key_present=bool(settings.openai_api_key),
+        ai_provider=ai["provider"],
+        ai_status=ai["status"],
+        ai_message=ai["message"],
     )

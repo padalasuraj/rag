@@ -222,6 +222,10 @@ function SourceRow({
   onDelete: (s: Source) => void
 }) {
   const busy = source.status === 'pending' || source.status === 'processing'
+  const canReindex =
+    (source.source_type === 'pdf' || source.source_type === 'youtube') &&
+    (source.status === 'completed' || source.status === 'failed')
+
   return (
     <motion.div
       layout
@@ -271,7 +275,7 @@ function SourceRow({
             <ExternalLink className="h-4 w-4" />
           </a>
         )}
-        {(source.status === 'completed' || source.status === 'failed') && (
+        {canReindex && (
           <button
             onClick={() => onReindex(source)}
             className="rounded-lg p-2 text-ink-dim transition hover:bg-white/10 hover:text-ink"

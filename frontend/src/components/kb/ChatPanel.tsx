@@ -135,7 +135,7 @@ export function ChatPanel({ kbId, hasIndexedContent }: Props) {
         onError: (message) => {
           patchStreaming({
             content:
-              'The assistant ran into a problem answering that. Please check that the backend and your API key are configured, then try again.',
+              'The assistant could not complete that answer. Please try again in a moment.',
             streaming: false,
           })
           setStreaming(false)

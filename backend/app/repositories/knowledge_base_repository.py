@@ -9,24 +9,34 @@ from __future__ import annotations
 
 from sqlalchemy import func, select
 
-from app.models import Chunk, KnowledgeBase, Source
+from app.models import Chunk, KnowledgeBase, Source, StoredFile, WorkspaceKnowledgeBase, ChatMessage, QueryLog
+from app.workspace import workspace_id
+from sqlalchemy import delete as sql_delete
 from app.schemas import KnowledgeBaseOut, SourceCounts
 
 
 def create(db, name: str, description: str, is_demo: bool = False) -> KnowledgeBase:
     kb = KnowledgeBase(name=name, description=description, is_demo=is_demo)
     db.add(kb)
+    db.flush()
+    db.add(WorkspaceKnowledgeBase(knowledge_base_id=kb.id, workspace_id=workspace_id.get()))
     db.commit()
     db.refresh(kb)
     return kb
 
 
 def get(db, kb_id: str) -> KnowledgeBase | None:
+    ownership = db.get(WorkspaceKnowledgeBase, kb_id)
+    if ownership is None or ownership.workspace_id != workspace_id.get():
+        return None
     return db.get(KnowledgeBase, kb_id)
 
 
 def list_all(db) -> list[KnowledgeBase]:
-    stmt = select(KnowledgeBase).order_by(KnowledgeBase.updated_at.desc())
+    stmt = (select(KnowledgeBase)
+            .join(WorkspaceKnowledgeBase, WorkspaceKnowledgeBase.knowledge_base_id == KnowledgeBase.id)
+            .where(WorkspaceKnowledgeBase.workspace_id == workspace_id.get())
+            .order_by(KnowledgeBase.updated_at.desc()))
     return list(db.execute(stmt).scalars().all())
 
 
@@ -42,6 +52,11 @@ def update(db, kb: KnowledgeBase, name: str | None, description: str | None) -> 
 
 
 def delete(db, kb: KnowledgeBase) -> None:
+    source_ids = select(Source.id).where(Source.knowledge_base_id == kb.id)
+    db.execute(sql_delete(StoredFile).where(StoredFile.source_id.in_(source_ids)))
+    db.execute(sql_delete(WorkspaceKnowledgeBase).where(WorkspaceKnowledgeBase.knowledge_base_id == kb.id))
+    db.execute(sql_delete(ChatMessage).where(ChatMessage.knowledge_base_id == kb.id))
+    db.execute(sql_delete(QueryLog).where(QueryLog.knowledge_base_id == kb.id))
     db.delete(kb)
     db.commit()
 
