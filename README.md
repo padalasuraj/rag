@@ -270,3 +270,9 @@ pip install -r requirements.txt
 ## License
 
 MIT. See [LICENSE](./LICENSE).
+
+## Original Prototype
+
+The remote YouTube script is preserved in [the prototype archive](docs/YOUTUBE_PROTOTYPE.md).
+
+<img width="1536" height="1024" alt="process" src="https://github.com/user-attachments/assets/724cdae8-604e-4696-a018-53772a60be92" />
